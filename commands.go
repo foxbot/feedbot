@@ -1,8 +1,10 @@
 package feedbot
 
 import (
+	"database/sql"
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
@@ -137,22 +139,14 @@ func add(ctx *context) error {
 	}
 
 	if l := len(ctx.args); l < 1 || l > 2 {
-		err = ctx.Reply("**usage:** `add <uri> [channel]`; please omit spaces from arguments!")
-		if err != nil {
-			return errors.WithStack(err)
-		}
-		return nil
+		return ctx.Reply("**usage:** `add <uri> [channel]`; please omit spaces from arguments!")
 	}
 	uri := ctx.args[0]
 	var channel string
 	if len(ctx.args) == 2 {
 		c := ctx.args[1]
 		if !channelRegex.MatchString(c) {
-			err = ctx.Reply("when specifying a channel ID, please use a #channel mention!")
-			if err != nil {
-				return errors.WithStack(err)
-			}
-			return nil
+			return ctx.Reply("when specifying a channel ID, please use a #channel mention!")
 		}
 		// <#...>
 		channel = c[2 : len(c)-1]
@@ -166,10 +160,7 @@ func add(ctx *context) error {
 	}
 	sub, err := ctx.bot.c.AddSubscription(channel, feed.ID)
 	if err == ErrSubExists {
-		err = ctx.Reply(fmt.Sprintf("this subscription (#%d) already exists!", sub.ID))
-		if err != nil {
-			return err
-		}
+		return ctx.Reply(fmt.Sprintf("this subscription (#%d) already exists!", sub.ID))
 	} else if err != nil {
 		return err
 	}
@@ -187,7 +178,36 @@ func remove(ctx *context) error {
 		return nil
 	}
 
-	return nil
+	if len(ctx.args) != 1 {
+		return ctx.Reply("**usage:** `remove <id>`; please omit spaces from arguments?!")
+	}
+	id, err := strconv.Atoi(ctx.args[0])
+	if err != nil {
+		return ctx.Reply("`id` must be a number!")
+	}
+	sub, err := ctx.bot.c.GetSubscription(id)
+	if err == sql.ErrNoRows {
+		return ctx.Reply("could not find a subscription with that ID, check the list again?")
+	} else if err != nil {
+		return err
+	}
+
+	channel, err := ctx.s.State.Channel(sub.ChannelID)
+	if err != nil {
+		return errors.Wrap(err, "err fetching channel from state")
+	}
+	if channel == nil {
+		channel, err = ctx.s.Channel(sub.ChannelID)
+		if err != nil {
+			return errors.Wrap(err, "err fetching channel from api")
+		}
+	}
+	if channel.GuildID != ctx.m.GuildID {
+		return ctx.Reply(fmt.Sprintf("subscription #%d does not exist in this guild.", id))
+	}
+
+	err = ctx.bot.c.DestroySubscription(id)
+	return ctx.Reply(fmt.Sprintf("subscription #%d has been deleted.", id))
 }
 
 // list

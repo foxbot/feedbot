@@ -36,7 +36,7 @@ CREATE TABLE subscription_overrides (
 	enable_embeds int,
 	enable_webhooks int,
 
-	FOREIGN KEY(sub_id) REFERENCES subscriptions(id)
+	FOREIGN KEY(sub_id) REFERENCES subscriptions(id) ON DELETE CASCADE
 );
 `
 
@@ -205,4 +205,32 @@ func (c *Controller) AddSubscription(channelID string, feedID int) (*Subscriptio
 	s.ChannelID = channelID
 	s.FeedID = feedID
 	return &s, nil
+}
+
+// GetSubscription gets a subscription from its ID
+func (c *Controller) GetSubscription(id int) (*Subscription, error) {
+	r, err := c.db.Query("SELECT (id, channel_id, feed_id) FROM subscriptions WHERE id = ?;")
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	var s Subscription
+	err = r.Scan(&s.ID, &s.ChannelID, &s.FeedID)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	return &s, nil
+}
+
+// DestroySubscription deletes a subscription from the database
+func (c *Controller) DestroySubscription(id int) error {
+	r, err := c.db.Exec("DELETE FROM subscriptions WHERE id = ?;", id)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if n, err := r.RowsAffected(); err == nil {
+		if n == 0 {
+			return errors.Wrap(sql.ErrNoRows, "no rows on subscription delete")
+		}
+	}
+	return err
 }
