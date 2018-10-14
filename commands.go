@@ -210,6 +210,33 @@ func list(ctx *context) error {
 		return nil
 	}
 
+	gc, err := ctx.bot.c.GetGuildConfig(ctx.m.GuildID)
+	if err != nil {
+		return err
+	}
+	subs, err := ctx.bot.c.GetSubscriptions(ctx.m.GuildID)
+	if err != nil {
+		return err
+	}
+
+	var b strings.Builder
+	b.WriteString(fmt.Sprintf("**Guild Contact:** `%s`\n**Embeds?** %v\n**Webhooks?** %v\n\n",
+		gc.Contact, gc.Embeds, gc.Webhooks))
+
+	b.WriteString("**Sub ID | Channel | Feed URI | Embed? | Webhook?\n\n**")
+	for _, s := range subs {
+		b.WriteString(fmt.Sprintf("%d | <#%s> | `%s` | %v | %v",
+			s.ID, s.ChannelID, s.Feed.URI, s.Overwrite.Embeds, s.Overwrite.Webhooks))
+
+		if b.Len() > 1900 {
+			err = ctx.Reply(b.String())
+			if err != nil {
+				return err
+			}
+			b = strings.Builder{}
+		}
+	}
+
 	return nil
 }
 
