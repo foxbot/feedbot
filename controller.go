@@ -24,6 +24,7 @@ CREATE TABLE guild_config (
 
 CREATE TABLE subscriptions (
 	id int PRIMARY KEY,
+	guild_id text NOT NULL,
 	channel_id text NOT NULL,
 	feed_id int NOT NULL,
 
@@ -50,6 +51,7 @@ type Feed struct {
 // Subscription contains the metadata for a subscription to a feed
 type Subscription struct {
 	ID        int
+	GuildID   string
 	ChannelID string
 	FeedID    int
 }
@@ -66,8 +68,8 @@ type GuildConfig struct {
 type Overwrite struct {
 	ID             int
 	SubscriptionID int
-	Embeds         bool
-	Webhooks       bool
+	Embeds         sql.NullBool
+	Webhooks       sql.NullBool
 }
 
 // Controller contains logic for manipulating the database
@@ -166,7 +168,7 @@ func (c *Controller) UpdateFeedTimestamp(feed *Feed, timestamp *time.Time) error
 }
 
 // AddSubscription adds a subscription to the given feed for a channel
-func (c *Controller) AddSubscription(channelID string, feedID int) (*Subscription, error) {
+func (c *Controller) AddSubscription(channelID, guildID string, feedID int) (*Subscription, error) {
 	// ensure subscriptions don't already exist
 	r, err := c.db.Query(`
 	SELECT (id) FROM subscriptions WHERE feed_id = ?, channel_id = ?
@@ -188,10 +190,11 @@ func (c *Controller) AddSubscription(channelID string, feedID int) (*Subscriptio
 	}
 
 	r, err = c.db.Query(`
-	INSERT INTO subscriptions (channel_id, feed_id)
-	VALUES ($1, $2);
+	INSERT INTO subscriptions (guild_id, channel_id, feed_id)
+	VALUES ($3, $1, $2);
+	INSERT INTO subscription_overrides (sub_id) SELECT (id) FROM subscriptions WHERE channel_id = $1, feed_id = $2;
 	SELECT (id) FROM subscriptions WHERE channel_id = $1, feed_id = $2;
-	`, channelID, feedID)
+	`, channelID, feedID, guildID)
 	defer r.Close()
 
 	if err != nil {
@@ -202,6 +205,7 @@ func (c *Controller) AddSubscription(channelID string, feedID int) (*Subscriptio
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	s.GuildID = guildID
 	s.ChannelID = channelID
 	s.FeedID = feedID
 	return &s, nil
@@ -209,12 +213,12 @@ func (c *Controller) AddSubscription(channelID string, feedID int) (*Subscriptio
 
 // GetSubscription gets a subscription from its ID
 func (c *Controller) GetSubscription(id int) (*Subscription, error) {
-	r, err := c.db.Query("SELECT (id, channel_id, feed_id) FROM subscriptions WHERE id = ?;")
+	r, err := c.db.Query("SELECT (id, guild_id, channel_id, feed_id) FROM subscriptions WHERE id = ?;")
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	var s Subscription
-	err = r.Scan(&s.ID, &s.ChannelID, &s.FeedID)
+	err = r.Scan(&s.ID, &s.GuildID, &s.ChannelID, &s.FeedID)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -249,6 +253,23 @@ func (c *Controller) DestroySubscription(id int) error {
 	return err
 }
 
+// CreateGuildConfig creates an empty GuildConfig for a guild
+func (c *Controller) CreateGuildConfig(guildID string, ownerContact string) error {
+	r, err := c.db.Exec(`
+	INSERT INTO guild_settings (id, contact, enable_embeds, enable_webhooks)
+	VALUES (?, ?, 0, 0);
+	`)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if n, err := r.RowsAffected(); err == nil {
+		if n == 0 {
+			return errors.Wrap(sql.ErrNoRows, "no rows on modify guild embeds")
+		}
+	}
+	return err
+}
+
 // ModifyGuildContact changes the guild's contact address
 func (c *Controller) ModifyGuildContact(guildID string, contact string) error {
 	r, err := c.db.Exec("UPDATE guild_settings SET contact = ? WHERE id = ?;", contact, guildID)
@@ -257,7 +278,70 @@ func (c *Controller) ModifyGuildContact(guildID string, contact string) error {
 	}
 	if n, err := r.RowsAffected(); err == nil {
 		if n == 0 {
-			return sql.ErrNoRows
+			return errors.Wrap(sql.ErrNoRows, "no rows on modify guild contact")
+		}
+	}
+	return err
+}
+
+// ModifyGuildEmbeds changes the guild's embed rule
+func (c *Controller) ModifyGuildEmbeds(guildID string, embeds bool) error {
+	r, err := c.db.Exec("UPDATE guild_settings SET enable_embeds = ? WHERE id = ?;", embeds, guildID)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if n, err := r.RowsAffected(); err == nil {
+		if n == 0 {
+			return errors.Wrap(sql.ErrNoRows, "no rows on modify guild embeds")
+		}
+	}
+	return err
+}
+
+// ModifyGuildWebhooks changes the guild's webhook rule
+func (c *Controller) ModifyGuildWebhooks(guildID string, embeds bool) error {
+	r, err := c.db.Exec("UPDATE guild_settings SET enable_embeds = ? WHERE id = ?;", embeds, guildID)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if n, err := r.RowsAffected(); err == nil {
+		if n == 0 {
+			return errors.Wrap(sql.ErrNoRows, "no rows on modify guild webhooks")
+		}
+	}
+	return err
+}
+
+// DestroyGuildData removes all data assosciated with a guild.
+func (c *Controller) DestroyGuildData(guildID string) {
+	// TODO
+}
+
+// ModifyOverwriteEmbeds changes the embeds policy of a subscription overwrite
+func (c *Controller) ModifyOverwriteEmbeds(subID int, embeds bool) error {
+	r, err := c.db.Exec("UPDATE subscription_overrides SET enable_embeds = ? WHERE sub_id = ?",
+		embeds, subID)
+	if err != nil {
+		return err
+	}
+	if n, err := r.RowsAffected(); err == nil {
+		if n == 0 {
+			return errors.Wrap(sql.ErrNoRows, "no rows on modify override embeds")
+		}
+	}
+	return err
+}
+
+// ModifyOverwriteWebhooks changes the webhooks policy of a subscription overwrite
+func (c *Controller) ModifyOverwriteWebhooks(subID int, webhooks bool) error {
+	r, err := c.db.Exec("UPDATE subscription_overrides SET enable_webhooks = ? WHERE sub_id = ?",
+		webhooks, subID)
+	if err != nil {
+		return err
+	}
+	if n, err := r.RowsAffected(); err == nil {
+		if n == 0 {
+			return errors.Wrap(sql.ErrNoRows, "no rows on modify override embeds")
 		}
 	}
 	return err

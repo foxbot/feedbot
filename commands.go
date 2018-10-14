@@ -158,7 +158,7 @@ func add(ctx *context) error {
 	if err != nil {
 		return err
 	}
-	sub, err := ctx.bot.c.AddSubscription(channel, feed.ID)
+	sub, err := ctx.bot.c.AddSubscription(channel, ctx.m.GuildID, feed.ID)
 	if err == ErrSubExists {
 		return ctx.Reply(fmt.Sprintf("this subscription (#%d) already exists!", sub.ID))
 	} else if err != nil {
@@ -192,12 +192,7 @@ func remove(ctx *context) error {
 		return err
 	}
 
-	channel, err := findChannel(ctx, sub.ChannelID)
-	if err != nil {
-		return err
-	}
-
-	if channel.GuildID != ctx.m.GuildID {
+	if sub.GuildID != ctx.m.GuildID {
 		return ctx.Reply(fmt.Sprintf("subscription #%d does not exist in this guild.", id))
 	}
 
@@ -276,12 +271,7 @@ func setChannel(ctx *context) error {
 		return err
 	}
 
-	channel, err := findChannel(ctx, sub.ChannelID)
-	if err != nil {
-		return err
-	}
-
-	if channel.GuildID != ctx.m.GuildID {
+	if sub.GuildID != ctx.m.GuildID {
 		return ctx.Reply(fmt.Sprintf("subscription #%d does not exist in this guild.", id))
 	}
 
@@ -323,12 +313,100 @@ func setContact(ctx *context) error {
 
 // set embed <on|off> [id]
 func setEmbed(ctx *context) error {
-	return nil
+	if len(ctx.args) < 2 {
+		return ctx.Reply("**usage:** `set embed <on|off> [id]`")
+	}
+
+	a := ctx.args[1]
+	var val bool
+	if a == "on" {
+		val = true
+	} else if a == "off" {
+		val = false
+	} else {
+		return ctx.Reply("parameter must be one of on|off")
+	}
+
+	if len(ctx.args) == 2 {
+		err := ctx.bot.c.ModifyGuildEmbeds(ctx.m.GuildID, val)
+		if err != nil {
+			return err
+		}
+	} else {
+		id, err := strconv.Atoi(ctx.args[2])
+		if err != nil {
+			return ctx.Reply("`id` must be a number!")
+		}
+		sub, err := ctx.bot.c.GetSubscription(id)
+		if err == sql.ErrNoRows {
+			return ctx.Reply("could not find a subscription with that ID, check the list again?")
+		} else if err != nil {
+			return err
+		}
+
+		if sub.GuildID != ctx.m.GuildID {
+			return ctx.Reply(fmt.Sprintf("subscription #%d does not exist in this guild.", id))
+		}
+
+		err = ctx.bot.c.ModifyOverwriteEmbeds(sub.ID, val)
+		if err != nil {
+			return err
+		}
+	}
+
+	if val {
+		return ctx.Reply("feedbot will now post updates in this guild using embeds, unless overridden elsewhere.")
+	}
+	return ctx.Reply("feedbot will no longer post updates in this guild using embeds, unless overridden elsewhere.")
 }
 
 // set webhook <on|off> [id]
 func setWebhook(ctx *context) error {
-	return nil
+	if len(ctx.args) < 2 {
+		return ctx.Reply("**usage:** `set webhook <on|off> [id]`")
+	}
+
+	a := ctx.args[1]
+	var val bool
+	if a == "on" {
+		val = true
+	} else if a == "off" {
+		val = false
+	} else {
+		return ctx.Reply("parameter must be one of on|off")
+	}
+
+	if len(ctx.args) == 2 {
+		err := ctx.bot.c.ModifyGuildWebhooks(ctx.m.GuildID, val)
+		if err != nil {
+			return err
+		}
+	} else {
+		id, err := strconv.Atoi(ctx.args[2])
+		if err != nil {
+			return ctx.Reply("`id` must be a number!")
+		}
+		sub, err := ctx.bot.c.GetSubscription(id)
+		if err == sql.ErrNoRows {
+			return ctx.Reply("could not find a subscription with that ID, check the list again?")
+		} else if err != nil {
+			return err
+		}
+
+		if sub.GuildID != ctx.m.GuildID {
+			return ctx.Reply(fmt.Sprintf("subscription #%d does not exist in this guild.", id))
+		}
+
+		err = ctx.bot.c.ModifyOverwriteWebhooks(sub.ID, val)
+		if err != nil {
+			return err
+		}
+	}
+
+	if val {
+		return ctx.Reply("feedbot will now post updates in this guild using webhooks, unless overridden elsewhere.")
+	}
+	return ctx.Reply("feedbot will no longer post updates in this guild using webhooks, unless overridden elsewhere.")
 }
 
 const adminOnly = "Sorry, feedbot requires the **ADMINISTRATOR** privilege!"
