@@ -221,6 +221,20 @@ func (c *Controller) GetSubscription(id int) (*Subscription, error) {
 	return &s, nil
 }
 
+// ModifySubscriptionChannel changes the channel_id for a Subscription
+func (c *Controller) ModifySubscriptionChannel(id int, channelID string) error {
+	r, err := c.db.Exec("UPDATE subscriptions SET channel_id = ? WHERE id = ?;", channelID, id)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if n, err := r.RowsAffected(); err == nil {
+		if n == 0 {
+			return sql.ErrNoRows
+		}
+	}
+	return err
+}
+
 // DestroySubscription deletes a subscription from the database
 func (c *Controller) DestroySubscription(id int) error {
 	r, err := c.db.Exec("DELETE FROM subscriptions WHERE id = ?;", id)
@@ -230,6 +244,20 @@ func (c *Controller) DestroySubscription(id int) error {
 	if n, err := r.RowsAffected(); err == nil {
 		if n == 0 {
 			return errors.Wrap(sql.ErrNoRows, "no rows on subscription delete")
+		}
+	}
+	return err
+}
+
+// ModifyGuildContact changes the guild's contact address
+func (c *Controller) ModifyGuildContact(guildID string, contact string) error {
+	r, err := c.db.Exec("UPDATE guild_settings SET contact = ? WHERE id = ?;", contact, guildID)
+	if err != nil {
+		return errors.WithStack(err)
+	}
+	if n, err := r.RowsAffected(); err == nil {
+		if n == 0 {
+			return sql.ErrNoRows
 		}
 	}
 	return err

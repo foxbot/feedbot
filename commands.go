@@ -192,16 +192,11 @@ func remove(ctx *context) error {
 		return err
 	}
 
-	channel, err := ctx.s.State.Channel(sub.ChannelID)
+	channel, err := findChannel(ctx, sub.ChannelID)
 	if err != nil {
-		return errors.Wrap(err, "err fetching channel from state")
+		return err
 	}
-	if channel == nil {
-		channel, err = ctx.s.Channel(sub.ChannelID)
-		if err != nil {
-			return errors.Wrap(err, "err fetching channel from api")
-		}
-	}
+
 	if channel.GuildID != ctx.m.GuildID {
 		return ctx.Reply(fmt.Sprintf("subscription #%d does not exist in this guild.", id))
 	}
@@ -223,10 +218,7 @@ func list(ctx *context) error {
 	return nil
 }
 
-// set channel <id> [channel]
-// set contact <user|channel>
-// set embed <on|off> [id]
-// set webhook <on|off> [id]
+// set <channel|contact|embed|webhook> [...]
 func set(ctx *context) error {
 	ok, err := checkPrivilege(ctx)
 	if err != nil {
@@ -236,6 +228,106 @@ func set(ctx *context) error {
 		return nil
 	}
 
+	if len(ctx.args) == 0 {
+		return ctx.Reply("**usage:** set <channel|contact|embed|webhook> ..., see help command.")
+	}
+	subCommand := ctx.args[0]
+	switch subCommand {
+	case "channel":
+		err = setChannel(ctx)
+	case "contact":
+		err = setContact(ctx)
+	case "embed":
+		err = setEmbed(ctx)
+	case "webhook":
+		err = setWebhook(ctx)
+	default:
+		err = ctx.Reply("subcommand must be one of channel|contact|embed|webhook, see help command.")
+	}
+	return err
+}
+
+// set channel <id> [channel]
+func setChannel(ctx *context) error {
+	if len(ctx.args) < 2 {
+		return ctx.Reply("**usage:** `set channel <id> [channel]`; please omit spaces from arguments?!")
+	}
+
+	var channelID string
+	if len(ctx.args) == 3 {
+		c := ctx.args[2]
+		if !channelRegex.MatchString(c) {
+			return ctx.Reply("when specifying a channel ID, please use a #channel mention!")
+		}
+		// <#...>
+		channelID = c[2 : len(c)-1]
+	} else {
+		channelID = ctx.m.ChannelID
+	}
+
+	id, err := strconv.Atoi(ctx.args[1])
+	if err != nil {
+		return ctx.Reply("`id` must be a number!")
+	}
+	sub, err := ctx.bot.c.GetSubscription(id)
+	if err == sql.ErrNoRows {
+		return ctx.Reply("could not find a subscription with that ID, check the list again?")
+	} else if err != nil {
+		return err
+	}
+
+	channel, err := findChannel(ctx, sub.ChannelID)
+	if err != nil {
+		return err
+	}
+
+	if channel.GuildID != ctx.m.GuildID {
+		return ctx.Reply(fmt.Sprintf("subscription #%d does not exist in this guild.", id))
+	}
+
+	err = ctx.bot.c.ModifySubscriptionChannel(id, channelID)
+	if err != nil {
+		return err
+	}
+
+	return ctx.Reply(fmt.Sprintf("subscription #%d will now write to <#%s>", id, channelID))
+}
+
+// set contact <user|channel>
+func setContact(ctx *context) error {
+	if len(ctx.args) != 2 {
+		return ctx.Reply("**usage:** `set contact <user|channel>`; please use a user mention, user id, or channel mention, and omit spaces.")
+	}
+	arg := ctx.args[1]
+
+	var id string
+	if channelRegex.MatchString(arg) {
+		// <#...>
+		c := arg[2 : len(arg)-1]
+		id = "c:" + c
+	} else if len(ctx.m.Mentions) > 0 {
+		u := ctx.m.Mentions[0].ID
+		id = "u:" + u
+	} else if _, err := strconv.Atoi(arg); err == nil {
+		id = "u:" + arg
+	} else {
+		return ctx.Reply("contact must be a user mention, user id, or channel mention; not a user name or channel name.")
+	}
+
+	err := ctx.bot.c.ModifyGuildContact(ctx.m.GuildID, id)
+	if err != nil {
+		return err
+	}
+	return ctx.Reply("the guild's contact has been changed.")
+}
+
+// set embed <on|off> [id]
+func setEmbed(ctx *context) error {
+	return nil
+}
+
+// set webhook <on|off> [id]
+func setWebhook(ctx *context) error {
 	return nil
 }
 
@@ -275,4 +367,18 @@ func memberHasPermission(s *discordgo.Session, guildID string, userID string, pe
 	}
 
 	return false, nil
+}
+
+func findChannel(ctx *context, id string) (*discordgo.Channel, error) {
+	channel, err := ctx.s.State.Channel(id)
+	if err != nil {
+		return nil, errors.Wrap(err, "err fetching channel from state")
+	}
+	if channel == nil {
+		channel, err = ctx.s.Channel(id)
+		if err != nil {
+			return nil, errors.Wrap(err, "err fetching channel from api")
+		}
+	}
+	return channel, nil
 }
