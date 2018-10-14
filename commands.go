@@ -2,9 +2,11 @@ package feedbot
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 
 	"github.com/bwmarrin/discordgo"
+	"github.com/pkg/errors"
 )
 
 type context struct {
@@ -13,6 +15,13 @@ type context struct {
 	m    *discordgo.MessageCreate
 	args []string
 }
+
+// Reply sends a message to the source channel
+func (c *context) Reply(m string) error {
+	_, err := c.s.ChannelMessageSend(c.m.ChannelID, m)
+	return err
+}
+
 type commandHandler = func(c *context) error
 
 var mentionPrefix = "<@0>"
@@ -20,12 +29,14 @@ var mentionPrefixLen = len(mentionPrefix)
 var prefix = "/feed:"
 var prefixLen = len(prefix)
 
+var channelRegex = regexp.MustCompile(`<#\d+>`)
+
 var mux = map[string]commandHandler{
-	"help":   nil,
-	"add":    nil,
-	"remove": nil,
-	"list":   nil,
-	"set":    nil,
+	"help":   help,
+	"add":    add,
+	"remove": remove,
+	"list":   list,
+	"set":    set,
 }
 
 // onReady handles the Discord READY event
@@ -110,23 +121,63 @@ if webhooks are enabled for a feed, the **MANAGE WEBHOOKS** permission must be g
 if a permission is missing, or a feed is broken, feedbot will notify the emergency contact.
 `
 
+// help
 func help(ctx *context) error {
-	_, err := ctx.s.ChannelMessageSend(ctx.m.ChannelID, helpText)
-	return err
+	return ctx.Reply(helpText)
 }
 
+// add <uri> [channel]
 func add(ctx *context) error {
 	ok, err := checkPrivilege(ctx)
 	if err != nil {
-		return err
+		return errors.WithStack(err)
 	}
 	if !ok {
 		return nil
 	}
 
-	return nil
+	if l := len(ctx.args); l < 1 || l > 2 {
+		err = ctx.Reply("**usage:** `add <uri> [channel]`; please omit spaces from arguments!")
+		if err != nil {
+			return errors.WithStack(err)
+		}
+		return nil
+	}
+	uri := ctx.args[0]
+	var channel string
+	if len(ctx.args) == 2 {
+		c := ctx.args[1]
+		if !channelRegex.MatchString(c) {
+			err = ctx.Reply("when specifying a channel ID, please use a #channel mention!")
+			if err != nil {
+				return errors.WithStack(err)
+			}
+			return nil
+		}
+		// <#...>
+		channel = c[2 : len(c)-1]
+	} else {
+		channel = ctx.m.ChannelID
+	}
+
+	feed, err := ctx.bot.c.GetOrCreateFeed(uri)
+	if err != nil {
+		return err
+	}
+	sub, err := ctx.bot.c.AddSubscription(channel, feed.ID)
+	if err == ErrSubExists {
+		err = ctx.Reply(fmt.Sprintf("this subscription (#%d) already exists!", sub.ID))
+		if err != nil {
+			return err
+		}
+	} else if err != nil {
+		return err
+	}
+
+	return ctx.Reply(fmt.Sprintf("subscription #%d created!", sub.ID))
 }
 
+// remove <id>
 func remove(ctx *context) error {
 	ok, err := checkPrivilege(ctx)
 	if err != nil {
@@ -139,6 +190,7 @@ func remove(ctx *context) error {
 	return nil
 }
 
+// list
 func list(ctx *context) error {
 	ok, err := checkPrivilege(ctx)
 	if err != nil {
@@ -151,6 +203,10 @@ func list(ctx *context) error {
 	return nil
 }
 
+// set channel <id> [channel]
+// set contact <user|channel>
+// set embed <on|off> [id]
+// set webhook <on|off> [id]
 func set(ctx *context) error {
 	ok, err := checkPrivilege(ctx)
 	if err != nil {
@@ -171,7 +227,7 @@ func checkPrivilege(ctx *context) (bool, error) {
 		return false, err
 	}
 	if !ok {
-		if _, err = ctx.s.ChannelMessageSend(ctx.m.ChannelID, adminOnly); err != nil {
+		if err = ctx.Reply(adminOnly); err != nil {
 			return false, err
 		}
 	}
