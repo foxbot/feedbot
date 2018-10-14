@@ -21,7 +21,12 @@ func NewBot(token string) (*Bot, error) {
 		return nil, err
 	}
 
-	return &Bot{
+	bot := &Bot{
 		dg: session,
-	}, nil
+	}
+
+	session.AddHandler(bot.onReady)
+	session.AddHandler(bot.onMessageCreate)
+
+	return bot, nil
 }
