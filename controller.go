@@ -5,6 +5,7 @@ import (
 	"time"
 
 	_ "github.com/mattn/go-sqlite3" // driver for database/sql
+	"github.com/pkg/errors"
 )
 
 const schema string = `
@@ -66,4 +67,21 @@ func (c *Controller) GetFeeds() ([]Feed, error) {
 	}
 
 	return f, nil
+}
+
+// UpdateFeedTimestamp updates a feed's last_updated value
+func (c *Controller) UpdateFeedTimestamp(feed *Feed, timestamp *time.Time) error {
+	r, err := c.db.Exec("UPDATE feeds SET last_updated = ? WHERE id = ?;",
+		timestamp, feed.ID)
+	if err != nil {
+		return err
+	}
+
+	if n, err := r.RowsAffected(); err != nil {
+		return err
+	} else if n != 1 {
+		return errors.New("invalid number of rows affected")
+	}
+
+	return nil
 }
