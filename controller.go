@@ -253,11 +253,11 @@ func (c *Controller) GetSubscription(id int) (*Subscription, error) {
 func (c *Controller) GetSubscriptions(guildID string) ([]Subscription, error) {
 	var subs []Subscription
 	r, err := c.db.Query(`
-	SELECT subscriptions.id, subscriptions.channel_id, feeds.uri,
-		subscription_overrides.enable_embeds, subscription_overrides.enable_webhooks
-		FROM subscriptions INNER JOIN feeds ON feeds.id = subscriptions.feed_id
-		INNER JOIN subscription_overrides ON subscription_overrides.sub_id = subscriptions.id
-		WHERE subscriptions.guild_id = ?;
+	SELECT s.id, s.channel_id, f.uri, o.enable_embeds, o.enable_webhooks
+		FROM subscriptions as s
+		INNER JOIN feeds as f ON f.id = s.feed_id
+		INNER JOIN subscription_overrides as o ON o.sub_id = s.id
+		WHERE s.guild_id = ?;
 	`, guildID)
 
 	if err != nil {
