@@ -12,14 +12,14 @@ const schema string = `
 CREATE TABLE feeds (
 	id INTEGER PRIMARY KEY,
 	uri text UNIQUE NOT NULL,
-	last_updated text NOT NULL,
+	last_updated timestamp NOT NULL
 );
 
 CREATE TABLE guild_config (
 	id text PRIMARY KEY,
 	contact text NOT NULL,
 	enable_embeds int NOT NULL,
-	enable_webhooks int NOT NULL,
+	enable_webhooks int NOT NULL
 );
 
 CREATE TABLE subscriptions (
@@ -114,18 +114,23 @@ func (c *Controller) CreateTables() error {
 // GetOrCreateFeed will insert a new RSS Feed to the database if one does not exist, and return
 // a Feed for it.
 func (c *Controller) GetOrCreateFeed(uri string) (*Feed, error) {
-	r, err := c.db.Query(`
+	_, err := c.db.Exec(`
 	INSERT OR IGNORE INTO feeds (uri, last_updated) VALUES ($1, $2);
-	SELECT id, uri, last_updated FROM feeds WHERE uri = $1;
-	`, uri, "1970-01-01 00:00:00")
+	`, uri, time.Time{})
 
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	defer r.Close()
+
+	rs, err := c.db.Query("SELECT id, uri, last_updated FROM feeds WHERE uri = $1;", uri)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer rs.Close()
+	rs.Next()
 
 	var f Feed
-	err = r.Scan(&f.ID, &f.URI, &f.LastUpdated)
+	err = rs.Scan(&f.ID, &f.URI, &f.LastUpdated)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -173,37 +178,51 @@ func (c *Controller) UpdateFeedTimestamp(feed *Feed, timestamp *time.Time) error
 func (c *Controller) AddSubscription(channelID, guildID string, feedID int) (*Subscription, error) {
 	// ensure subscriptions don't already exist
 	r, err := c.db.Query(`
-	SELECT id FROM subscriptions WHERE feed_id = ?, channel_id = ?
+	SELECT id FROM subscriptions WHERE feed_id = ? AND channel_id = ?;
 	`, feedID, channelID)
-	defer r.Close()
 
-	if err != nil && err != sql.ErrNoRows {
+	if err != nil {
 		return nil, errors.WithStack(err)
 	}
-	if err == nil {
+
+	defer r.Close()
+	if r.Next() {
 		var s Subscription
 		err = r.Scan(&s.ID)
 		if err != nil {
-			return nil, err
+			return nil, errors.WithStack(err)
 		}
 		s.ChannelID = channelID
 		s.FeedID = feedID
 		return &s, ErrSubExists
 	}
 
-	r, err = c.db.Query(`
+	_, err = c.db.Exec(`
 	INSERT INTO subscriptions (guild_id, channel_id, feed_id)
-	VALUES ($3, $1, $2);
-	INSERT INTO subscription_overrides (sub_id) SELECT id FROM subscriptions WHERE channel_id = $1, feed_id = $2;
-	SELECT id FROM subscriptions WHERE channel_id = $1, feed_id = $2;
-	`, channelID, feedID, guildID)
-	defer r.Close()
-
+	VALUES (?, ?, ?);
+	`, guildID, channelID, feedID)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+
+	_, err = c.db.Exec(`
+	INSERT INTO subscription_overrides (sub_id) 
+		SELECT id FROM subscriptions WHERE channel_id = ? AND feed_id = ?
+	`, channelID, feedID)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+
+	rs, err := c.db.Query("SELECT id FROM subscriptions WHERE channel_id = $1 AND feed_id = $2;",
+		channelID, feedID)
+	if err != nil {
+		return nil, errors.WithStack(err)
+	}
+	defer rs.Close()
+	rs.Next()
+
 	var s Subscription
-	err = r.Scan(&s.ID)
+	err = rs.Scan(&s.ID)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
@@ -215,10 +234,13 @@ func (c *Controller) AddSubscription(channelID, guildID string, feedID int) (*Su
 
 // GetSubscription gets a subscription from its ID
 func (c *Controller) GetSubscription(id int) (*Subscription, error) {
-	r, err := c.db.Query("SELECT id, guild_id, channel_id, feed_id FROM subscriptions WHERE id = ?;")
+	r, err := c.db.Query("SELECT id, guild_id, channel_id, feed_id FROM subscriptions WHERE id = ?;", id)
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
+	defer r.Close()
+	r.Next()
+
 	var s Subscription
 	err = r.Scan(&s.ID, &s.GuildID, &s.ChannelID, &s.FeedID)
 	if err != nil {
@@ -236,7 +258,7 @@ func (c *Controller) GetSubscriptions(guildID string) ([]Subscription, error) {
 		FROM subscriptions INNER JOIN feeds ON feeds.id = subscriptions.feed_id
 		INNER JOIN subscription_overrides ON subscription_overrides.sub_id = subscriptions.id
 		WHERE subscriptions.guild_id = ?;
-	`)
+	`, guildID)
 
 	if err != nil {
 		return subs, errors.WithStack(err)
@@ -288,9 +310,9 @@ func (c *Controller) DestroySubscription(id int) error {
 // CreateGuildConfig creates an empty GuildConfig for a guild
 func (c *Controller) CreateGuildConfig(guildID string, ownerContact string) error {
 	r, err := c.db.Exec(`
-	INSERT INTO guild_settings (id, contact, enable_embeds, enable_webhooks)
+	INSERT INTO guild_config (id, contact, enable_embeds, enable_webhooks)
 	VALUES (?, ?, 0, 0);
-	`)
+	`, guildID, ownerContact)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -306,13 +328,14 @@ func (c *Controller) CreateGuildConfig(guildID string, ownerContact string) erro
 func (c *Controller) GetGuildConfig(guildID string) (*GuildConfig, error) {
 	r, err := c.db.Query(`
 	SELECT id, contact, enable_embeds, enable_webhooks
-	FROM guild_settings WHERE id = ?;
+	FROM guild_config WHERE id = ?;
 	`, guildID)
 
 	if err != nil {
 		return nil, errors.WithStack(err)
 	}
 	defer r.Close()
+	r.Next()
 
 	var g GuildConfig
 	err = r.Scan(&g.ID, &g.Contact, &g.Embeds, &g.Webhooks)
@@ -325,7 +348,7 @@ func (c *Controller) GetGuildConfig(guildID string) (*GuildConfig, error) {
 
 // ModifyGuildContact changes the guild's contact address
 func (c *Controller) ModifyGuildContact(guildID string, contact string) error {
-	r, err := c.db.Exec("UPDATE guild_settings SET contact = ? WHERE id = ?;", contact, guildID)
+	r, err := c.db.Exec("UPDATE guild_config SET contact = ? WHERE id = ?;", contact, guildID)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -339,7 +362,7 @@ func (c *Controller) ModifyGuildContact(guildID string, contact string) error {
 
 // ModifyGuildEmbeds changes the guild's embed rule
 func (c *Controller) ModifyGuildEmbeds(guildID string, embeds bool) error {
-	r, err := c.db.Exec("UPDATE guild_settings SET enable_embeds = ? WHERE id = ?;", embeds, guildID)
+	r, err := c.db.Exec("UPDATE guild_config SET enable_embeds = ? WHERE id = ?;", embeds, guildID)
 	if err != nil {
 		return errors.WithStack(err)
 	}
@@ -353,7 +376,7 @@ func (c *Controller) ModifyGuildEmbeds(guildID string, embeds bool) error {
 
 // ModifyGuildWebhooks changes the guild's webhook rule
 func (c *Controller) ModifyGuildWebhooks(guildID string, embeds bool) error {
-	r, err := c.db.Exec("UPDATE guild_settings SET enable_embeds = ? WHERE id = ?;", embeds, guildID)
+	r, err := c.db.Exec("UPDATE guild_config SET enable_embeds = ? WHERE id = ?;", embeds, guildID)
 	if err != nil {
 		return errors.WithStack(err)
 	}

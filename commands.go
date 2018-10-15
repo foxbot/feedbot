@@ -4,6 +4,7 @@ import (
 	"database/sql"
 	"fmt"
 	"regexp"
+	"runtime/debug"
 	"strconv"
 	"strings"
 
@@ -30,21 +31,29 @@ var mentionPrefix = "<@0>"
 var mentionPrefixLen = len(mentionPrefix)
 var prefix = "/feed:"
 var prefixLen = len(prefix)
+var owner = "<@0>"
 
 var channelRegex = regexp.MustCompile(`<#\d+>`)
 
 var mux = map[string]commandHandler{
-	"help":   help,
-	"add":    add,
-	"remove": remove,
-	"list":   list,
-	"set":    set,
+	"help":        help,
+	"add":         add,
+	"remove":      remove,
+	"list":        list,
+	"set":         set,
+	"dbg~migrate": dbgMigrate,
 }
 
 // onReady handles the Discord READY event
 func (bot *Bot) onReady(s *discordgo.Session, m *discordgo.Ready) {
 	mentionPrefix = m.User.Mention()
 	mentionPrefixLen = len(mentionPrefix)
+
+	apps, err := s.Application("@me")
+	if err != nil {
+		panic(err)
+	}
+	owner = apps.Owner.ID
 }
 
 // onMessageCreate handles the Discord MESSAGE_CREATE event
@@ -55,9 +64,9 @@ func (bot *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate
 
 	var content string
 	if strings.HasPrefix(m.Content, mentionPrefix) {
-		content = content[mentionPrefixLen:]
+		content = m.Content[mentionPrefixLen:]
 	} else if strings.HasPrefix(m.Content, prefix) {
-		content = content[prefixLen:]
+		content = m.Content[prefixLen:]
 	} else {
 		return
 	}
@@ -78,7 +87,8 @@ func (bot *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate
 
 	defer func() {
 		if err := recover(); err != nil {
-			l.Println(fmt.Sprintf("cmd:%s pnc:%v", parts[0], err))
+			l.Println(fmt.Sprintf("cmd:%s pnc:%+v", parts[0], err))
+			debug.PrintStack()
 		}
 	}()
 
@@ -90,7 +100,7 @@ func (bot *Bot) onMessageCreate(s *discordgo.Session, m *discordgo.MessageCreate
 	}
 	err := f(ctx)
 	if err != nil {
-		l.Println(fmt.Sprintf("cmd:%s err:%v", parts[0], err))
+		l.Println(fmt.Sprintf("cmd:%s err:%+v", parts[0], err))
 	}
 }
 
@@ -225,7 +235,7 @@ func list(ctx *context) error {
 
 	b.WriteString("**Sub ID | Channel | Feed URI | Embed? | Webhook?\n\n**")
 	for _, s := range subs {
-		b.WriteString(fmt.Sprintf("%d | <#%s> | `%s` | %v | %v",
+		b.WriteString(fmt.Sprintf("%d | <#%s> | `%s` | %v | %v\n",
 			s.ID, s.ChannelID, s.Feed.URI, s.Overwrite.Embeds, s.Overwrite.Webhooks))
 
 		if b.Len() > 1900 {
@@ -237,7 +247,7 @@ func list(ctx *context) error {
 		}
 	}
 
-	return nil
+	return ctx.Reply(b.String())
 }
 
 // set <channel|contact|embed|webhook> [...]
@@ -486,4 +496,26 @@ func findChannel(ctx *context, id string) (*discordgo.Channel, error) {
 		}
 	}
 	return channel, nil
+}
+
+// dbg~migrate
+func dbgMigrate(ctx *context) error {
+	if ctx.m.Author.ID != owner {
+		return nil
+	}
+
+	guild, err := ctx.s.State.Guild(ctx.m.GuildID)
+	if err != nil {
+		return err
+	}
+	if guild == nil {
+		ctx.Reply("couldn't find the guild not gonna try")
+	}
+
+	c := "u:" + guild.OwnerID
+	err = ctx.bot.c.CreateGuildConfig(guild.ID, c)
+	if err != nil {
+		return err
+	}
+	return ctx.Reply("gotem")
 }
