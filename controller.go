@@ -394,7 +394,7 @@ func (c *Controller) DestroyGuildData(guildID string) {
 }
 
 // ModifyOverwriteEmbeds changes the embeds policy of a subscription overwrite
-func (c *Controller) ModifyOverwriteEmbeds(subID int, embeds bool) error {
+func (c *Controller) ModifyOverwriteEmbeds(subID int, embeds sql.NullBool) error {
 	r, err := c.db.Exec("UPDATE subscription_overrides SET enable_embeds = ? WHERE sub_id = ?",
 		embeds, subID)
 	if err != nil {
@@ -409,7 +409,7 @@ func (c *Controller) ModifyOverwriteEmbeds(subID int, embeds bool) error {
 }
 
 // ModifyOverwriteWebhooks changes the webhooks policy of a subscription overwrite
-func (c *Controller) ModifyOverwriteWebhooks(subID int, webhooks bool) error {
+func (c *Controller) ModifyOverwriteWebhooks(subID int, webhooks sql.NullBool) error {
 	r, err := c.db.Exec("UPDATE subscription_overrides SET enable_webhooks = ? WHERE sub_id = ?",
 		webhooks, subID)
 	if err != nil {

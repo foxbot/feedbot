@@ -114,8 +114,10 @@ const helpText = `
 - list: list the RSS feeds active in this guild, and any additional configuration options
 - set channel <id> [channel]: set the channel a given feed should write to; will assume current channel if unspecified
 - set contact <user|channel>: set the emergency contact for this guild; defaults to the server owner
-- set embed <on|off> [id]: enable or disable embeds for this guild; optionally specifying a feed to change this behavior for
-- set webhook <on|off> [id]: enable or disable webhooks for this guild, optionally specifying a feed to change this behavior for
+- set embed <on|off|inherit> [id]: enable or disable embeds for this guild; optionally specifying a feed to change this behavior for
+- set webhook <on|off|inherit> [id]: enable or disable webhooks for this guild, optionally specifying a feed to change this behavior for
+
+the inherit flag may only be used when specifying a feed-specific overwrite!
 
 **how it works:**
 every 60 minutes, feedbot will ping the feeds its users have specified. for feeds that have new content, feedbot
@@ -236,7 +238,7 @@ func list(ctx *context) error {
 	b.WriteString("**Sub ID | Channel | Feed URI | Embed? | Webhook?\n\n**")
 	for _, s := range subs {
 		b.WriteString(fmt.Sprintf("%d | <#%s> | `%s` | %v | %v\n",
-			s.ID, s.ChannelID, s.Feed.URI, s.Overwrite.Embeds, s.Overwrite.Webhooks))
+			s.ID, s.ChannelID, s.Feed.URI, fmtBool(s.Overwrite.Embeds), fmtBool(s.Overwrite.Webhooks)))
 
 		if b.Len() > 1900 {
 			err = ctx.Reply(b.String())
@@ -348,24 +350,29 @@ func setContact(ctx *context) error {
 	return ctx.Reply("the guild's contact has been changed.")
 }
 
-// set embed <on|off> [id]
+// set embed <on|off|inherit> [id]
 func setEmbed(ctx *context) error {
 	if len(ctx.args) < 2 {
-		return ctx.Reply("**usage:** `set embed <on|off> [id]`")
+		return ctx.Reply("**usage:** `set embed <on|off|inherit> [id]`")
 	}
 
 	a := ctx.args[1]
-	var val bool
+	var val sql.NullBool
 	if a == "on" {
-		val = true
+		val = sql.NullBool{Bool:true, Valid:true}
 	} else if a == "off" {
-		val = false
+		val = sql.NullBool{Bool:false, Valid:true}
+	} else if a == "inherit" {
+		val = sql.NullBool{Valid:false}
 	} else {
 		return ctx.Reply("parameter must be one of on|off")
 	}
 
 	if len(ctx.args) == 2 {
-		err := ctx.bot.c.ModifyGuildEmbeds(ctx.m.GuildID, val)
+		if !val.Valid {
+			return ctx.Reply("`inherit` is only a valid flag on overwrites, please specify on|off")
+		}
+		err := ctx.bot.c.ModifyGuildEmbeds(ctx.m.GuildID, val.Bool)
 		if err != nil {
 			return err
 		}
@@ -391,10 +398,13 @@ func setEmbed(ctx *context) error {
 		}
 	}
 
-	if val {
+	if val.Bool {
 		return ctx.Reply("feedbot will now post updates in this guild using embeds, unless overridden elsewhere.")
 	}
-	return ctx.Reply("feedbot will no longer post updates in this guild using embeds, unless overridden elsewhere.")
+	if val.Valid {
+		return ctx.Reply("feedbot will no longer post updates in this guild using embeds, unless overridden elsewhere.")
+	}
+	return ctx.Reply("feedbot will default to the guild-wide behavior for embeds.")
 }
 
 // set webhook <on|off> [id]
@@ -404,17 +414,22 @@ func setWebhook(ctx *context) error {
 	}
 
 	a := ctx.args[1]
-	var val bool
+	var val sql.NullBool
 	if a == "on" {
-		val = true
+		val = sql.NullBool{Bool:true, Valid:true}
 	} else if a == "off" {
-		val = false
+		val = sql.NullBool{Bool:false, Valid:true}
+	} else if a == "inherit" {
+		val = sql.NullBool{Valid:false}
 	} else {
 		return ctx.Reply("parameter must be one of on|off")
 	}
 
 	if len(ctx.args) == 2 {
-		err := ctx.bot.c.ModifyGuildWebhooks(ctx.m.GuildID, val)
+		if !val.Valid {
+			return ctx.Reply("`inherit` is only a valid flag on overwrites, please specify on|off")
+		}
+		err := ctx.bot.c.ModifyGuildWebhooks(ctx.m.GuildID, val.Bool)
 		if err != nil {
 			return err
 		}
@@ -440,10 +455,13 @@ func setWebhook(ctx *context) error {
 		}
 	}
 
-	if val {
+	if val.Bool {
 		return ctx.Reply("feedbot will now post updates in this guild using webhooks, unless overridden elsewhere.")
 	}
-	return ctx.Reply("feedbot will no longer post updates in this guild using webhooks, unless overridden elsewhere.")
+	if val.Valid {
+		return ctx.Reply("feedbot will no longer post updates in this guild using webhooks, unless overridden elsewhere.")
+	}
+	return ctx.Reply("feedbot will default to the guild-wide behavior for webhooks.")
 }
 
 const adminOnly = "Sorry, feedbot requires the **ADMINISTRATOR** privilege!"
@@ -518,4 +536,14 @@ func dbgMigrate(ctx *context) error {
 		return err
 	}
 	return ctx.Reply("gotem")
+}
+
+func fmtBool(v sql.NullBool) string {
+	if !v.Valid {
+		return "inherit"
+	} else if v.Bool {
+		return "on"
+	} else {
+		return "false"
+	}
 }
